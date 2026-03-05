@@ -6,12 +6,13 @@ import { CronExpressionParser } from 'cron-parser';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
-import { isValidGroupFolder } from './group-folder.js';
+import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendFile?: (jid: string, filePath: string, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -74,6 +75,18 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              // Normalize chatJid: agents sometimes omit the channel prefix (e.g. "7376029847"
+              // instead of "tg:7376029847"). Try the raw value first, then common prefixes.
+              if (data.chatJid && !registeredGroups[data.chatJid]) {
+                for (const prefix of ['tg:']) {
+                  const prefixed = prefix + data.chatJid;
+                  if (registeredGroups[prefixed]) {
+                    logger.debug({ raw: data.chatJid, resolved: prefixed }, 'Normalized IPC chatJid');
+                    data.chatJid = prefixed;
+                    break;
+                  }
+                }
+              }
               if (data.type === 'message' && data.chatJid && data.text) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
@@ -91,6 +104,31 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
                   );
+                }
+              } else if (data.type === 'file' && data.chatJid && data.filePath && deps.sendFile) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
+                  // Translate container path /workspace/group/... → host path
+                  const containerPrefix = '/workspace/group';
+                  if (!data.filePath.startsWith(containerPrefix + '/') && data.filePath !== containerPrefix) {
+                    logger.warn({ filePath: data.filePath }, 'IPC file path must be under /workspace/group');
+                    fs.unlinkSync(filePath);
+                    continue;
+                  }
+                  const relPath = data.filePath.slice(containerPrefix.length);
+                  const groupDir = resolveGroupFolderPath(sourceGroup);
+                  const hostPath = path.join(groupDir, relPath);
+                  // Security: ensure resolved path stays within group folder
+                  const rel = path.relative(groupDir, hostPath);
+                  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+                    logger.warn({ hostPath }, 'IPC file path escapes group folder, blocked');
+                    fs.unlinkSync(filePath);
+                    continue;
+                  }
+                  await deps.sendFile(data.chatJid, hostPath, data.caption);
+                  logger.info({ chatJid: data.chatJid, hostPath, sourceGroup }, 'IPC file sent');
+                } else {
+                  logger.warn({ chatJid: data.chatJid, sourceGroup }, 'Unauthorized IPC file attempt blocked');
                 }
               }
               fs.unlinkSync(filePath);
