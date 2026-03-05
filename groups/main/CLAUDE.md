@@ -113,6 +113,10 @@ Key paths inside the container:
 - `/workspace/project/store/messages.db` (registered_groups table) - Group config
 - `/workspace/project/groups/` - All group folders
 
+> **WARNING**: `/workspace/project/` is read-only. Do NOT run git pull/push/fetch or any write operation from paths under `/workspace/project/`. Always use `/workspace/group/` for write operations.
+>
+> Obsidian vault git operations must use `/workspace/group/notebooks-obsidian-vault/` (read-write), NOT `/workspace/project/groups/main/notebooks-obsidian-vault/` (read-only).
+
 ---
 
 ## Managing Groups
