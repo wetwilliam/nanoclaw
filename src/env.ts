@@ -40,3 +40,21 @@ export function readEnvFile(keys: string[]): Record<string, string> {
 
   return result;
 }
+
+/**
+ * Return the Anthropic base URL for API calls.
+ * Reads ANTHROPIC_BASE_URL from .env first, then falls back to process.env.
+ */
+export function getAnthropicBaseUrl(): string | undefined {
+  const envValues = readEnvFile(['ANTHROPIC_BASE_URL']);
+  return envValues.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL;
+}
+
+/**
+ * Return the model name to use.
+ * Reads CLAUDE_MODEL from .env first, then falls back to process.env.
+ */
+export function getModelName(): string | undefined {
+  const envValues = readEnvFile(['CLAUDE_MODEL']);
+  return envValues.CLAUDE_MODEL || process.env.CLAUDE_MODEL;
+}

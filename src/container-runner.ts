@@ -15,7 +15,7 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { readEnvFile } from './env.js';
+import { readEnvFile, getAnthropicBaseUrl, getModelName } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { CONTAINER_RUNTIME_BIN, readonlyMountArgs, stopContainer } from './container-runtime.js';
@@ -106,21 +106,24 @@ function buildVolumeMounts(
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(settingsFile, JSON.stringify({
-      env: {
-        // Enable agent swarms (subagent orchestration)
-        // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-        // Load CLAUDE.md from additional mounted directories
-        // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-        CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-        // Enable Claude's memory feature (persists user preferences between sessions)
-        // https://code.claude.com/docs/en/memory#manage-auto-memory
-        CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-      },
-    }, null, 2) + '\n');
+  // Always write settings.json so model changes take effect on the next spawn.
+  const settingsEnv: Record<string, string> = {
+    // Enable agent swarms (subagent orchestration)
+    // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+    // Load CLAUDE.md from additional mounted directories
+    // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
+    CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+    // Enable Claude's memory feature (persists user preferences between sessions)
+    // https://code.claude.com/docs/en/memory#manage-auto-memory
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+  };
+  const configuredModel = getModelName();
+  if (configuredModel) {
+    // ANTHROPIC_MODEL is read by Claude Code CLI subprocesses (e.g. agent teams)
+    settingsEnv.ANTHROPIC_MODEL = configuredModel;
   }
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: settingsEnv }, null, 2) + '\n');
 
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
@@ -156,8 +159,9 @@ function buildVolumeMounts(
   // groups. Recompiled on container startup via entrypoint.sh.
   const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
   const groupAgentRunnerDir = path.join(DATA_DIR, 'sessions', group.folder, 'agent-runner-src');
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  // Always sync so code changes reach existing groups on the next spawn.
+  if (fs.existsSync(agentRunnerSrc)) {
+    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true, force: true });
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -181,12 +185,45 @@ function buildVolumeMounts(
 /**
  * Read allowed secrets from .env for passing to the container via stdin.
  * Secrets are never written to disk or mounted as files.
+ * Prefers ANTHROPIC_AUTH_TOKEN (Bearer style) over ANTHROPIC_API_KEY.
  */
 function readSecrets(): Record<string, string> {
-  return readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
+  const secrets: Record<string, string> = {};
+
+  const envFileValues = readEnvFile([
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_BASE_URL',
+    'CLAUDE_MODEL',
+  ]);
+
+  // Pass OAuth token if present
+  if (envFileValues.CLAUDE_CODE_OAUTH_TOKEN) {
+    secrets.CLAUDE_CODE_OAUTH_TOKEN = envFileValues.CLAUDE_CODE_OAUTH_TOKEN;
+  }
+
+  // Prefer ANTHROPIC_AUTH_TOKEN (sent as Authorization: Bearer) over ANTHROPIC_API_KEY
+  if (envFileValues.ANTHROPIC_AUTH_TOKEN) {
+    secrets.ANTHROPIC_AUTH_TOKEN = envFileValues.ANTHROPIC_AUTH_TOKEN;
+  } else if (envFileValues.ANTHROPIC_API_KEY) {
+    secrets.ANTHROPIC_API_KEY = envFileValues.ANTHROPIC_API_KEY;
+  }
+
+  const baseUrl = getAnthropicBaseUrl();
+  if (baseUrl) {
+    secrets.ANTHROPIC_BASE_URL = baseUrl;
+  }
+
+  const modelName = getModelName();
+  if (modelName) {
+    secrets.CLAUDE_MODEL = modelName;
+  }
+
+  return secrets;
 }
 
-function buildContainerArgs(mounts: VolumeMount[], containerName: string): string[] {
+function buildContainerArgs(mounts: VolumeMount[], containerName: string, secrets: Record<string, string>): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
@@ -200,6 +237,24 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string): strin
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
+  }
+
+  // Pass auth directly as env vars so Claude Code subprocess sees them in process.env.
+  // The env option in query() alone is not sufficient — Claude Code reads process.env directly.
+  const baseUrl = getAnthropicBaseUrl();
+  if (baseUrl) {
+    args.push('-e', `ANTHROPIC_BASE_URL=${baseUrl}`);
+  }
+  if (secrets.ANTHROPIC_AUTH_TOKEN) {
+    args.push('-e', `ANTHROPIC_AUTH_TOKEN=${secrets.ANTHROPIC_AUTH_TOKEN}`);
+  } else if (secrets.ANTHROPIC_API_KEY) {
+    args.push('-e', `ANTHROPIC_API_KEY=${secrets.ANTHROPIC_API_KEY}`);
+  }
+  if (secrets.CLAUDE_CODE_OAUTH_TOKEN) {
+    args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${secrets.CLAUDE_CODE_OAUTH_TOKEN}`);
+  }
+  if (secrets.CLAUDE_MODEL) {
+    args.push('-e', `CLAUDE_MODEL=${secrets.CLAUDE_MODEL}`);
   }
 
   for (const mount of mounts) {
@@ -229,7 +284,9 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  // Read secrets early so they can be passed both as Docker -e flags and via stdin
+  const secrets = readSecrets();
+  const containerArgs = buildContainerArgs(mounts, containerName, secrets);
 
   logger.debug(
     {
@@ -269,8 +326,8 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    // Pass secrets via stdin (never written to disk or mounted as files)
-    input.secrets = readSecrets();
+    // Pass secrets via stdin as well (belt-and-suspenders with the -e flags above)
+    input.secrets = secrets;
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
     // Remove secrets from input so they don't appear in logs
