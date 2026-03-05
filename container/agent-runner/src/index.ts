@@ -128,6 +128,56 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
+/**
+ * Strip thinking/redacted_thinking blocks from a session transcript before replay.
+ * These blocks are Claude-specific and cause 422 errors on non-Claude API endpoints
+ * that don't support array-format message content.
+ * Modifies the transcript file in-place; no-ops if the file doesn't exist.
+ */
+function stripThinkingBlocksFromTranscript(sessionId: string): void {
+  const transcriptPath = `/home/node/.claude/projects/-workspace-group/${sessionId}.jsonl`;
+  if (!fs.existsSync(transcriptPath)) return;
+
+  const raw = fs.readFileSync(transcriptPath, 'utf-8');
+  const lines = raw.split('\n');
+  let removedBlocks = 0;
+  let removedLines = 0;
+  const out: string[] = [];
+
+  for (const line of lines) {
+    if (!line.trim()) { out.push(line); continue; }
+
+    let obj: Record<string, unknown>;
+    try { obj = JSON.parse(line); } catch { out.push(line); continue; }
+
+    if (obj.type !== 'assistant') { out.push(line); continue; }
+
+    const msg = obj.message as { content?: unknown[] } | undefined;
+    if (!Array.isArray(msg?.content)) { out.push(line); continue; }
+
+    const before = msg.content.length;
+    msg.content = msg.content.filter((b: unknown) => {
+      const block = b as { type?: string };
+      return block.type !== 'thinking' && block.type !== 'redacted_thinking';
+    });
+    const removed = before - msg.content.length;
+    if (removed === 0) { out.push(line); continue; }
+
+    removedBlocks += removed;
+    if (msg.content.length === 0) {
+      // Turn consisted entirely of thinking — drop it
+      removedLines++;
+    } else {
+      out.push(JSON.stringify(obj));
+    }
+  }
+
+  if (removedBlocks > 0) {
+    fs.writeFileSync(transcriptPath, out.join('\n'), 'utf-8');
+    log(`Stripped ${removedBlocks} thinking block(s) from transcript (${removedLines} turn(s) dropped)`);
+  }
+}
+
 function getSessionSummary(
   sessionId: string,
   transcriptPath: string,
@@ -470,6 +520,13 @@ async function runQuery(
   }
   if (extraDirs.length > 0) {
     log(`Additional directories: ${extraDirs.join(', ')}`);
+  }
+
+  // Strip thinking/redacted_thinking blocks from transcript before replay.
+  // Non-Claude endpoints (NVIDIA NIM, OpenRouter non-Claude models) reject
+  // array-format message content containing these blocks with 422 errors.
+  if (sessionId) {
+    stripThinkingBlocksFromTranscript(sessionId);
   }
 
   for await (const message of query({
