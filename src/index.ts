@@ -24,6 +24,7 @@ import { cleanupOrphans, ensureContainerRuntimeRunning } from './container-runti
 import {
   getAllChats,
   getAllRegisteredGroups,
+  deleteSession,
   getAllSessions,
   getAllTasks,
   getMessagesSince,
@@ -180,6 +181,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+
+      // Guard: API errors (e.g. 422 thinking-block rejection) produce massive text that
+      // would flood the chat. Detect them, reset the broken session, and send a short notice.
+      if (text.startsWith('API Error: 4')) {
+        logger.error({ group: group.name, error: text.slice(0, 300) }, 'API error in agent output — resetting session');
+        deleteSession(group.folder);
+        delete sessions[group.folder];
+        await channel.sendMessage(chatJid, '⚠️ API 錯誤，已自動重置 session。請重新傳送你的訊息。');
+        outputSentToUser = true;
+        return;
+      }
+
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
