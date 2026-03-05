@@ -21,6 +21,7 @@ import {
   query,
   HookCallback,
   PreCompactHookInput,
+  PreToolUseHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
@@ -204,6 +205,30 @@ function createPreCompactHook(assistantName?: string): HookCallback {
     }
 
     return {};
+  };
+}
+
+// Secrets to strip from Bash tool subprocess environments.
+// These are needed by claude-code for API auth but should never
+// be visible to commands Kit runs.
+const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
+
+function createSanitizeBashHook(): HookCallback {
+  return async (input, _toolUseId, _context) => {
+    const preInput = input as PreToolUseHookInput;
+    const command = (preInput.tool_input as { command?: string })?.command;
+    if (!command) return {};
+
+    const unsetPrefix = `unset ${SECRET_ENV_VARS.join(' ')} 2>/dev/null; `;
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: {
+          ...(preInput.tool_input as Record<string, unknown>),
+          command: unsetPrefix + command,
+        },
+      },
+    };
   };
 }
 
@@ -411,6 +436,11 @@ async function runQuery(
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
+  // For non-Claude models: track last text seen in any assistant message as
+  // a fallback when result=null (e.g. Kimi K2.5 emits thinking blocks after
+  // the text block, which causes the SDK to return result=null).
+  const isClaudeModel = !sdkEnv['CLAUDE_MODEL'] || (sdkEnv['CLAUDE_MODEL'] as string).startsWith('claude') || (sdkEnv['CLAUDE_MODEL'] as string).startsWith('anthropic/claude');
+  let lastAssistantText: string | undefined;
 
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
@@ -418,6 +448,13 @@ async function runQuery(
   if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
+
+  // Mandatory reply instruction appended to every system prompt.
+  // Ensures non-Claude models (e.g. via OpenRouter) always produce a final
+  // text response instead of silently ending on a tool call.
+  const MUST_REPLY_INSTRUCTION = `\n\n---\nCRITICAL REQUIREMENT: You MUST always end your response with a plain-text reply to the user. Never finish your turn with only a tool call or file write. After completing any work, write a text message summarising what you did or answering the question. Returning an empty final response is not acceptable.`;
+
+  const systemPromptAppend = (globalClaudeMd ?? '') + MUST_REPLY_INSTRUCTION;
 
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
@@ -438,17 +475,12 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      model: sdkEnv['CLAUDE_MODEL'] as string | undefined,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? {
-            type: 'preset' as const,
-            preset: 'claude_code' as const,
-            append: globalClaudeMd,
-          }
-        : undefined,
+      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptAppend },
       allowedTools: [
         'Bash',
         'Read',
@@ -501,6 +533,18 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+      // For non-Claude models: capture last text block as fallback for result=null
+      if (!isClaudeModel) {
+        const content = (message as { message?: { content?: unknown[] } }).message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            const b = block as { type?: string; text?: string };
+            if (b.type === 'text' && b.text?.trim()) {
+              lastAssistantText = b.text.trim();
+            }
+          }
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -524,11 +568,15 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
-      const textResult =
-        'result' in message ? (message as { result?: string }).result : null;
-      log(
-        `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
-      );
+      let textResult = 'result' in message ? (message as { result?: string }).result : null;
+      // Non-Claude models (e.g. Kimi K2.5 with extended thinking) may emit
+      // thinking blocks after the text block, causing the SDK to return
+      // result=null. Fall back to the last assistant text we captured.
+      if (!textResult && !isClaudeModel && lastAssistantText) {
+        log(`result=null for non-Claude model, falling back to last assistant text`);
+        textResult = lastAssistantText;
+      }
+      log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
       writeOutput({
         status: 'success',
         result: textResult || null,
@@ -621,18 +669,31 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
+  // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL / OneCLI.
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
   };
+  // Expose chatJid as $CHAT_JID so Bash commands (e.g. IPC file sending) can use it
+  sdkEnv['CHAT_JID'] = containerInput.chatJid;
+  // Mirror CLAUDE_MODEL as ANTHROPIC_MODEL so the Claude Code CLI and agent team
+  // subprocesses also honour the configured model.
+  if (sdkEnv['CLAUDE_MODEL']) {
+    sdkEnv['ANTHROPIC_MODEL'] = sdkEnv['CLAUDE_MODEL'];
+  }
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
   let sessionId = containerInput.sessionId;
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
+
+  // Write chatJid to a file so agents can read it reliably without guessing
+  // Usage in Bash: chatJid=$(cat /workspace/ipc/chat_jid)
+  try {
+    fs.writeFileSync('/workspace/ipc/chat_jid', containerInput.chatJid, 'utf-8');
+  } catch { /* non-fatal */ }
 
   // Clean up stale _close sentinel from previous container runs
   try {

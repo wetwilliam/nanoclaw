@@ -16,6 +16,7 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
+import { getAnthropicBaseUrl, getModelName } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -144,28 +145,24 @@ function buildVolumeMounts(
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
-    );
+  // Always write settings.json so model changes take effect on the next spawn.
+  const settingsEnv: Record<string, string> = {
+    // Enable agent swarms (subagent orchestration)
+    // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+    // Load CLAUDE.md from additional mounted directories
+    // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
+    CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+    // Enable Claude's memory feature (persists user preferences between sessions)
+    // https://code.claude.com/docs/en/memory#manage-auto-memory
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+  };
+  const configuredModel = getModelName();
+  if (configuredModel) {
+    // ANTHROPIC_MODEL is read by Claude Code CLI subprocesses (e.g. agent teams)
+    settingsEnv.ANTHROPIC_MODEL = configuredModel;
   }
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: settingsEnv }, null, 2) + '\n');
 
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
@@ -278,6 +275,17 @@ async function buildContainerArgs(
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
+  }
+
+  // Pass model and base URL for custom/alternative API providers.
+  // Auth is handled by OneCLI gateway — no secrets passed here.
+  const baseUrl = getAnthropicBaseUrl();
+  if (baseUrl) {
+    args.push('-e', `ANTHROPIC_BASE_URL=${baseUrl}`);
+  }
+  const modelName = getModelName();
+  if (modelName) {
+    args.push('-e', `CLAUDE_MODEL=${modelName}`);
   }
 
   for (const mount of mounts) {
