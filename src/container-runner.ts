@@ -15,7 +15,7 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { readEnvFile, getAnthropicBaseUrl, getModelName } from './env.js';
+import { readEnvFile, getAnthropicBaseUrl, getModelName, getSmallFastModelName } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { CONTAINER_RUNTIME_BIN, readonlyMountArgs, stopContainer } from './container-runtime.js';
@@ -196,6 +196,8 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
     'CLAUDE_MODEL',
+    'ANTHROPIC_SMALL_FAST_MODEL',
+    'TAVILY_API_KEY',
   ]);
 
   // Pass OAuth token if present
@@ -218,6 +220,15 @@ function readSecrets(): Record<string, string> {
   const modelName = getModelName();
   if (modelName) {
     secrets.CLAUDE_MODEL = modelName;
+  }
+
+  const smallFastModel = getSmallFastModelName();
+  if (smallFastModel) {
+    secrets.ANTHROPIC_SMALL_FAST_MODEL = smallFastModel;
+  }
+
+  if (envFileValues.TAVILY_API_KEY) {
+    secrets.TAVILY_API_KEY = envFileValues.TAVILY_API_KEY;
   }
 
   return secrets;
@@ -255,6 +266,12 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string, secret
   }
   if (secrets.CLAUDE_MODEL) {
     args.push('-e', `CLAUDE_MODEL=${secrets.CLAUDE_MODEL}`);
+  }
+  if (secrets.ANTHROPIC_SMALL_FAST_MODEL) {
+    args.push('-e', `ANTHROPIC_SMALL_FAST_MODEL=${secrets.ANTHROPIC_SMALL_FAST_MODEL}`);
+  }
+  if (secrets.TAVILY_API_KEY) {
+    args.push('-e', `TAVILY_API_KEY=${secrets.TAVILY_API_KEY}`);
   }
 
   for (const mount of mounts) {
