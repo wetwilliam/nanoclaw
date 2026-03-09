@@ -16,7 +16,7 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
-import { getAnthropicBaseUrl, getModelName } from './env.js';
+import { readEnvFile, getAnthropicBaseUrl, getModelName, getSmallFastModelName } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -286,6 +286,14 @@ async function buildContainerArgs(
   const modelName = getModelName();
   if (modelName) {
     args.push('-e', `CLAUDE_MODEL=${modelName}`);
+  }
+  const smallFastModel = getSmallFastModelName();
+  if (smallFastModel) {
+    args.push('-e', `ANTHROPIC_SMALL_FAST_MODEL=${smallFastModel}`);
+  }
+  const envFileValues = readEnvFile(['TAVILY_API_KEY']);
+  if (envFileValues.TAVILY_API_KEY) {
+    args.push('-e', `TAVILY_API_KEY=${envFileValues.TAVILY_API_KEY}`);
   }
 
   for (const mount of mounts) {

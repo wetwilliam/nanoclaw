@@ -59,3 +59,13 @@ export function getModelName(): string | undefined {
   const envValues = readEnvFile(['CLAUDE_MODEL']);
   return envValues.CLAUDE_MODEL || process.env.CLAUDE_MODEL;
 }
+
+/**
+ * Return the small/fast model name used by the SDK for background operations
+ * (Task tool subagents, etc.). Reads ANTHROPIC_SMALL_FAST_MODEL from .env
+ * first, then falls back to process.env.
+ */
+export function getSmallFastModelName(): string | undefined {
+  const envValues = readEnvFile(['ANTHROPIC_SMALL_FAST_MODEL']);
+  return envValues.ANTHROPIC_SMALL_FAST_MODEL || process.env.ANTHROPIC_SMALL_FAST_MODEL;
+}

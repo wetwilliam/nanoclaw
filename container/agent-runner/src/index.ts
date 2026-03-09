@@ -739,6 +739,11 @@ async function main(): Promise<void> {
   if (sdkEnv['CLAUDE_MODEL']) {
     sdkEnv['ANTHROPIC_MODEL'] = sdkEnv['CLAUDE_MODEL'];
   }
+  // If no explicit small/fast model is set, default it to the main model so
+  // the SDK doesn't fall back to claude-haiku for background operations.
+  if (!sdkEnv['ANTHROPIC_SMALL_FAST_MODEL'] && sdkEnv['CLAUDE_MODEL']) {
+    sdkEnv['ANTHROPIC_SMALL_FAST_MODEL'] = sdkEnv['CLAUDE_MODEL'];
+  }
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
