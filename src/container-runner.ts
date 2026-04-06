@@ -356,6 +356,11 @@ export async function runContainerAgent(
     'Spawning container agent',
   );
 
+  // Sanitize JSONL session files before spawn to prevent lone surrogates
+  // (from any source: Bash tool output, truncated emoji, etc.) from causing
+  // HTTP 400 "invalid JSON" errors on the next API call.
+  sanitizeSessionJsonl(path.join(DATA_DIR, 'sessions', group.folder, '.claude'));
+
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
@@ -703,6 +708,44 @@ export async function runContainerAgent(
       });
     });
   });
+}
+
+/**
+ * Scan all .jsonl session files under the given .claude directory and replace
+ * any lone Unicode surrogates with U+FFFD. Lone surrogates are valid in JS
+ * strings but invalid in JSON, so they cause HTTP 400 errors when the SDK
+ * re-serializes session transcripts on the next API call.
+ */
+function sanitizeSessionJsonl(claudeDir: string): void {
+  const projectsDir = path.join(claudeDir, 'projects');
+  if (!fs.existsSync(projectsDir)) return;
+
+  // Regex: high surrogate not followed by low surrogate, OR low surrogate not preceded by high
+  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+  let sanitized = 0;
+  for (const projectDir of fs.readdirSync(projectsDir)) {
+    const fullDir = path.join(projectsDir, projectDir);
+    if (!fs.statSync(fullDir).isDirectory()) continue;
+    for (const file of fs.readdirSync(fullDir)) {
+      if (!file.endsWith('.jsonl')) continue;
+      const filePath = path.join(fullDir, file);
+      try {
+        const original = fs.readFileSync(filePath, 'utf8');
+        const cleaned = original.replace(loneSurrogate, '\uFFFD');
+        if (cleaned !== original) {
+          fs.writeFileSync(filePath, cleaned, 'utf8');
+          sanitized++;
+          logger.warn({ file: filePath }, 'Sanitized lone surrogates in session JSONL');
+        }
+      } catch (err) {
+        logger.warn({ file: filePath, err }, 'Failed to sanitize session JSONL');
+      }
+    }
+  }
+  if (sanitized > 0) {
+    logger.info({ claudeDir, sanitized }, 'Session JSONL sanitization complete');
+  }
 }
 
 export function writeTasksSnapshot(

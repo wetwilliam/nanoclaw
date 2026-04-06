@@ -370,6 +370,7 @@ async function runAgent(
   );
 
   // Wrap onOutput to track session ID from streamed results
+  let sessionWasReset = false;
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
@@ -377,6 +378,11 @@ async function runAgent(
           setSession(group.folder, output.newSessionId);
         }
         await onOutput(output);
+        // Detect if onOutput reset the session (e.g. API error recovery).
+        // If so, don't let the final container exit re-save the deleted session.
+        if (output.newSessionId && !sessions[group.folder]) {
+          sessionWasReset = true;
+        }
       }
     : undefined;
 
@@ -395,7 +401,7 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
+    if (output.newSessionId && !sessionWasReset) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
     }
