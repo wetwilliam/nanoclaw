@@ -81,7 +81,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 for (const prefix of ['tg:']) {
                   const prefixed = prefix + data.chatJid;
                   if (registeredGroups[prefixed]) {
-                    logger.debug({ raw: data.chatJid, resolved: prefixed }, 'Normalized IPC chatJid');
+                    logger.debug(
+                      { raw: data.chatJid, resolved: prefixed },
+                      'Normalized IPC chatJid',
+                    );
                     data.chatJid = prefixed;
                     break;
                   }
@@ -105,13 +108,27 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     'Unauthorized IPC message attempt blocked',
                   );
                 }
-              } else if (data.type === 'file' && data.chatJid && data.filePath && deps.sendFile) {
+              } else if (
+                data.type === 'file' &&
+                data.chatJid &&
+                data.filePath &&
+                deps.sendFile
+              ) {
                 const targetGroup = registeredGroups[data.chatJid];
-                if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
                   // Translate container path /workspace/group/... → host path
                   const containerPrefix = '/workspace/group';
-                  if (!data.filePath.startsWith(containerPrefix + '/') && data.filePath !== containerPrefix) {
-                    logger.warn({ filePath: data.filePath }, 'IPC file path must be under /workspace/group');
+                  if (
+                    !data.filePath.startsWith(containerPrefix + '/') &&
+                    data.filePath !== containerPrefix
+                  ) {
+                    logger.warn(
+                      { filePath: data.filePath },
+                      'IPC file path must be under /workspace/group',
+                    );
                     fs.unlinkSync(filePath);
                     continue;
                   }
@@ -121,14 +138,23 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   // Security: ensure resolved path stays within group folder
                   const rel = path.relative(groupDir, hostPath);
                   if (rel.startsWith('..') || path.isAbsolute(rel)) {
-                    logger.warn({ hostPath }, 'IPC file path escapes group folder, blocked');
+                    logger.warn(
+                      { hostPath },
+                      'IPC file path escapes group folder, blocked',
+                    );
                     fs.unlinkSync(filePath);
                     continue;
                   }
                   await deps.sendFile(data.chatJid, hostPath, data.caption);
-                  logger.info({ chatJid: data.chatJid, hostPath, sourceGroup }, 'IPC file sent');
+                  logger.info(
+                    { chatJid: data.chatJid, hostPath, sourceGroup },
+                    'IPC file sent',
+                  );
                 } else {
-                  logger.warn({ chatJid: data.chatJid, sourceGroup }, 'Unauthorized IPC file attempt blocked');
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC file attempt blocked',
+                  );
                 }
               }
               fs.unlinkSync(filePath);

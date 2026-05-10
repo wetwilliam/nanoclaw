@@ -16,7 +16,12 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { readEnvFile, getAnthropicBaseUrl, getModelName, getSmallFastModelName } from './env.js';
+import {
+  readEnvFile,
+  getAnthropicBaseUrl,
+  getModelName,
+  getSmallFastModelName,
+} from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -161,7 +166,10 @@ function buildVolumeMounts(
     // ANTHROPIC_MODEL is read by Claude Code CLI subprocesses (e.g. agent teams)
     settingsEnv.ANTHROPIC_MODEL = configuredModel;
   }
-  fs.writeFileSync(settingsFile, JSON.stringify({ env: settingsEnv }, null, 2) + '\n');
+  fs.writeFileSync(
+    settingsFile,
+    JSON.stringify({ env: settingsEnv }, null, 2) + '\n',
+  );
 
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
@@ -351,7 +359,9 @@ export async function runContainerAgent(
   // Sanitize JSONL session files before spawn to prevent lone surrogates
   // (from any source: Bash tool output, truncated emoji, etc.) from causing
   // HTTP 400 "invalid JSON" errors on the next API call.
-  sanitizeSessionJsonl(path.join(DATA_DIR, 'sessions', group.folder, '.claude'));
+  sanitizeSessionJsonl(
+    path.join(DATA_DIR, 'sessions', group.folder, '.claude'),
+  );
 
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
@@ -713,7 +723,8 @@ function sanitizeSessionJsonl(claudeDir: string): void {
   if (!fs.existsSync(projectsDir)) return;
 
   // Regex: high surrogate not followed by low surrogate, OR low surrogate not preceded by high
-  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+  const loneSurrogate =
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
   let sanitized = 0;
   for (const projectDir of fs.readdirSync(projectsDir)) {
@@ -728,15 +739,24 @@ function sanitizeSessionJsonl(claudeDir: string): void {
         if (cleaned !== original) {
           fs.writeFileSync(filePath, cleaned, 'utf8');
           sanitized++;
-          logger.warn({ file: filePath }, 'Sanitized lone surrogates in session JSONL');
+          logger.warn(
+            { file: filePath },
+            'Sanitized lone surrogates in session JSONL',
+          );
         }
       } catch (err) {
-        logger.warn({ file: filePath, err }, 'Failed to sanitize session JSONL');
+        logger.warn(
+          { file: filePath, err },
+          'Failed to sanitize session JSONL',
+        );
       }
     }
   }
   if (sanitized > 0) {
-    logger.info({ claudeDir, sanitized }, 'Session JSONL sanitization complete');
+    logger.info(
+      { claudeDir, sanitized },
+      'Session JSONL sanitization complete',
+    );
   }
 }
 

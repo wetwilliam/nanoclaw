@@ -188,9 +188,7 @@ export class TelegramChannel implements Channel {
       });
     });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) =>
-      storeNonText(ctx, '[Voice message]'),
-    );
+    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot.on('message:document', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
@@ -210,7 +208,11 @@ export class TelegramChannel implements Channel {
 
       let content: string;
       try {
-        const filename = await this.downloadFile(fileId, originalName, group.folder);
+        const filename = await this.downloadFile(
+          fileId,
+          originalName,
+          group.folder,
+        );
         content = `[Document: /workspace/group/files/${filename}]${caption}`;
         logger.info({ chatJid, filename }, 'Document downloaded');
       } catch (err) {
@@ -281,7 +283,11 @@ export class TelegramChannel implements Channel {
     return filename;
   }
 
-  private async downloadFile(fileId: string, originalName: string, folder: string): Promise<string> {
+  private async downloadFile(
+    fileId: string,
+    originalName: string,
+    folder: string,
+  ): Promise<string> {
     const fileInfo = await this.bot!.api.getFile(fileId);
     const filePath = fileInfo.file_path;
     if (!filePath) throw new Error('No file_path in Telegram getFile response');
@@ -329,7 +335,11 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  async sendFile(jid: string, filePath: string, caption?: string): Promise<void> {
+  async sendFile(
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');
       return;
@@ -341,9 +351,17 @@ export class TelegramChannel implements Channel {
       const fileStream = fs.createReadStream(filePath);
       const filename = path.basename(filePath);
       if (imageExts.has(ext)) {
-        await this.bot.api.sendPhoto(numericId, new InputFile(fileStream, filename), { caption });
+        await this.bot.api.sendPhoto(
+          numericId,
+          new InputFile(fileStream, filename),
+          { caption },
+        );
       } else {
-        await this.bot.api.sendDocument(numericId, new InputFile(fileStream, filename), { caption });
+        await this.bot.api.sendDocument(
+          numericId,
+          new InputFile(fileStream, filename),
+          { caption },
+        );
       }
       logger.info({ jid, filePath }, 'Telegram file sent');
     } catch (err) {

@@ -67,5 +67,8 @@ export function getModelName(): string | undefined {
  */
 export function getSmallFastModelName(): string | undefined {
   const envValues = readEnvFile(['ANTHROPIC_SMALL_FAST_MODEL']);
-  return envValues.ANTHROPIC_SMALL_FAST_MODEL || process.env.ANTHROPIC_SMALL_FAST_MODEL;
+  return (
+    envValues.ANTHROPIC_SMALL_FAST_MODEL ||
+    process.env.ANTHROPIC_SMALL_FAST_MODEL
+  );
 }

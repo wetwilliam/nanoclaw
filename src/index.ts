@@ -49,7 +49,12 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound, routeOutboundFile } from './router.js';
+import {
+  findChannel,
+  formatMessages,
+  formatOutbound,
+  routeOutboundFile,
+} from './router.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -263,10 +268,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Guard: API errors (e.g. 422 thinking-block rejection) produce massive text that
       // would flood the chat. Detect them, reset the broken session, and send a short notice.
       if (text.startsWith('API Error: 4')) {
-        logger.error({ group: group.name, error: text.slice(0, 300) }, 'API error in agent output — resetting session');
+        logger.error(
+          { group: group.name, error: text.slice(0, 300) },
+          'API error in agent output — resetting session',
+        );
         deleteSession(group.folder);
         delete sessions[group.folder];
-        await channel.sendMessage(chatJid, '⚠️ API 錯誤，已自動重置 session。請重新傳送你的訊息。');
+        await channel.sendMessage(
+          chatJid,
+          '⚠️ API 錯誤，已自動重置 session。請重新傳送你的訊息。',
+        );
         outputSentToUser = true;
         return;
       }
@@ -541,7 +552,6 @@ function recoverPendingMessages(): void {
     }
   }
 }
-
 
 async function main(): Promise<void> {
   ensureContainerRuntimeRunning();
